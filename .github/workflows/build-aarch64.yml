@@ -123,11 +123,34 @@ jobs:
           echo '--- built extension modules ---'
           ls "$RUNNER_TEMP/stage/opt/python-aarch64/lib/python"*/lib-dynload/*.so 2>/dev/null | wc -l
 
+      - name: Strip and slim
+        run: |
+          set -x
+          S="$RUNNER_TEMP/stage/opt/python-aarch64"
+          cd "$S"
+          du -sh . || true
+
+          # 1) 去掉符号与调试信息（体积大头）
+          aarch64-linux-gnu-strip --strip-unneeded bin/python3.16 || true
+          find . -type f -name '*.so*' -exec aarch64-linux-gnu-strip --strip-unneeded {} + 2>/dev/null || true
+
+          # 2) 删掉运行时用不到的东西（对齐 astral 的 install_only_stripped）
+          find . -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
+          find . -type f -name '*.pyc' -delete 2>/dev/null || true
+          find . -type d \( -name test -o -name tests -o -name idle_test \) -prune -exec rm -rf {} + 2>/dev/null || true
+          find . -type f -name '*.a' -delete 2>/dev/null || true
+          rm -rf include share/man share/doc lib/pkgconfig 2>/dev/null || true
+
+          echo '--- after slim ---'
+          du -sh .
+          du -sh bin lib 2>/dev/null || true
+          file bin/python3.16
+
       - name: Package
         run: |
           cd "$RUNNER_TEMP/stage/opt/python-aarch64"
-          tar czf "$GITHUB_WORKSPACE/python-aarch64-custom.tar.gz" .
-          ls -l "$GITHUB_WORKSPACE/python-aarch64-custom.tar.gz"
+          tar czf "$GITHUB_WORKSPACE/python-aarch64-slim.tar.gz" .
+          ls -l "$GITHUB_WORKSPACE/python-aarch64-slim.tar.gz"
 
       - name: Dump logs on failure
         if: failure()
@@ -141,5 +164,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: python-aarch64-build
-          path: python-aarch64-custom.tar.gz
+          path: python-aarch64-slim.tar.gz
           retention-days: 30

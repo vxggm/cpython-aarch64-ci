@@ -18,7 +18,7 @@ jobs:
           set -x
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential pkg-config unzip file qemu-user-static \
+            build-essential pkg-config unzip file qemu-user qemu-user-static \
             gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             libc6-dev-arm64-cross
 
@@ -107,7 +107,11 @@ jobs:
         run: |
           cd "$SRC"
           file ./python
-          qemu-aarch64 -L /usr/aarch64-linux-gnu ./python -c \
+          # qemu-user-static 装出来的名字是 qemu-aarch64-static，两种都试
+          QEMU=$(command -v qemu-aarch64 || command -v qemu-aarch64-static || true)
+          echo "qemu=$QEMU"
+          test -n "$QEMU"
+          "$QEMU" -L /usr/aarch64-linux-gnu ./python -c \
             'import sys, platform; print("version", sys.version.split()[0], "arch", platform.machine())'
 
       - name: Install to staging

@@ -37,12 +37,12 @@ jobs:
           LOG=/tmp/host.log
           exec > >(tee "$LOG") 2>&1
           df -h / /root | tail -3
-          cp -a "$SRC" /root/host_src
-          cd /root/host_src
+          cp -a "$SRC" "$RUNNER_TEMP/host_src"
+          cd "$RUNNER_TEMP/host_src"
           chmod +x configure
           ./configure --without-ensurepip --disable-test-modules
           make -j"$(nproc)"
-          /root/host_src/python -c 'import sys; print("host python", sys.version.split()[0])'
+          "$RUNNER_TEMP/host_src/python" -c 'import sys; print("host python", sys.version.split()[0])'
 
       - name: Configure (cross aarch64)
         run: |
@@ -50,7 +50,7 @@ jobs:
           # 7z 解压不会保留可执行位，先补上（否则 ./configure: Permission denied）
           chmod +x configure 2>/dev/null || true
           ./configure --host=aarch64-linux-gnu --build=x86_64-linux-gnu \
-            --with-build-python=/root/host_src/python \
+            --with-build-python="$RUNNER_TEMP/host_src/python" \
             --prefix=/opt/python-aarch64 --disable-ipv6 \
             --disable-test-modules --without-ensurepip \
             ac_cv_file__dev_ptmx=yes ac_cv_file__dev_ptc=no \
@@ -74,13 +74,13 @@ jobs:
       - name: Install to staging
         run: |
           cd "$SRC"
-          make install DESTDIR=/root/stage > /tmp/install.log 2>&1 || { tail -40 /tmp/install.log; exit 1; }
-          du -sh /root/stage/opt/python-aarch64
-          ls /root/stage/opt/python-aarch64/bin | head -10
+          make install DESTDIR="$RUNNER_TEMP/stage" > /tmp/install.log 2>&1 || { tail -40 /tmp/install.log; exit 1; }
+          du -sh "$RUNNER_TEMP/stage/opt/python-aarch64"
+          ls "$RUNNER_TEMP/stage/opt/python-aarch64/bin" | head -10
 
       - name: Package
         run: |
-          cd /root/stage/opt/python-aarch64
+          cd "$RUNNER_TEMP/stage/opt/python-aarch64"
           tar czf "$GITHUB_WORKSPACE/python-aarch64-custom.tar.gz" .
           ls -l "$GITHUB_WORKSPACE/python-aarch64-custom.tar.gz"
 

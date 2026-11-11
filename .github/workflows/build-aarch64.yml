@@ -59,9 +59,9 @@ jobs:
 
       - name: Extract source
         run: |
-          unzip -q cpython-3.12.14.zip
-          echo "SRC=cpython-3.12.14" >> "$GITHUB_ENV"
-          ls cpython-3.12.14 | head -8
+          unzip -q cpython-main.zip
+          echo "SRC=cpython-main" >> "$GITHUB_ENV"
+          ls cpython-main | head -8
 
       - name: Build host python (needed as --with-build-python)
         run: |
@@ -182,8 +182,8 @@ jobs:
       - name: Package
         run: |
           cd "$RUNNER_TEMP/stage/opt/python-aarch64"
-          tar czf "$GITHUB_WORKSPACE/python-aarch64-3.12.tar.gz" .
-          ls -l "$GITHUB_WORKSPACE/python-aarch64-3.12.tar.gz"
+          tar czf "$GITHUB_WORKSPACE/python-aarch64-3.16.tar.gz" .
+          ls -l "$GITHUB_WORKSPACE/python-aarch64-3.16.tar.gz"
 
       - name: Dump logs on failure
         if: failure()
@@ -197,5 +197,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: python-aarch64-build
-          path: python-aarch64-3.12.tar.gz
+          path: python-aarch64-3.16.tar.gz
           retention-days: 30

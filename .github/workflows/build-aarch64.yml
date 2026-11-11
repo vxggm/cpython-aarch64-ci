@@ -13,36 +13,54 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install host toolchain
+      - name: Prepare cross build environment
         run: |
+          set -x
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            p7zip-full gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
-            qemu-user-static file
-          # 交叉编译器自检：链接不出可执行文件时，这里就会先炸并把原因留在日志里
-          echo 'int main(void){return 0;}' > /tmp/t.c
-          { aarch64-linux-gnu-gcc /tmp/t.c -o /tmp/t; echo "cc_exit=$?"; file /tmp/t; \
-            aarch64-linux-gnu-gcc -v; } > /tmp/toolchain.log 2>&1
-          tail -20 /tmp/toolchain.log
+            build-essential pkg-config unzip file qemu-user-static \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            libc6-dev-arm64-cross
+
+          # ---- arm64 目标开发库：交叉编译 _ssl/_sqlite3/_bz2/_lzma/_ctypes/_zlib 必须要 ----
+          sudo dpkg --add-architecture arm64
+          sudo sed -i -E 's/^deb (http[^ ]+) /deb [arch=amd64] \1 /' /etc/apt/sources.list || true
+          echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse' \
+            | sudo tee /etc/apt/sources.list.d/arm64-ports.list
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            libc6:arm64 libssl-dev:arm64 zlib1g-dev:arm64 libffi-dev:arm64 \
+            libbz2-dev:arm64 liblzma-dev:arm64 libsqlite3-dev:arm64 \
+            libncursesw5-dev:arm64 libreadline-dev:arm64 uuid-dev:arm64
+
+          # ---- 编译器自检：链接不出可执行文件时立刻暴露，并把日志留给 artifact ----
+          {
+            echo 'int main(void){return 0;}' > /tmp/t.c
+            aarch64-linux-gnu-gcc /tmp/t.c -o /tmp/t
+            echo "cc_exit=$?"
+            file /tmp/t
+            aarch64-linux-gnu-gcc -v
+          } > /tmp/env-toolchain.log 2>&1 || true
+          tail -25 /tmp/env-toolchain.log
           test -x /tmp/t
+
+          {
+            echo "sysroot: $(aarch64-linux-gnu-gcc -print-sysroot)"
+            ls /usr/aarch64-linux-gnu | head -10
+            ls /usr/lib/aarch64-linux-gnu/pkgconfig | head -20
+          } > /tmp/env-libs.log 2>&1 || true
+          tail -15 /tmp/env-libs.log
 
       - name: Extract source
         run: |
-          7z x -y cpython-main.7z > /dev/null
-          SRC=$(ls -d cpython-*/ 2>/dev/null | head -1 | sed 's#/$##')
-          if [ -z "$SRC" ]; then
-            SRC=$(find . -maxdepth 2 -name configure -printf '%h\n' | head -1 | sed 's#^\./##')
-          fi
-          echo "SRC=$SRC" | tee -a "$GITHUB_ENV"
-          echo "--- top of source ---"
-          ls "$SRC" | head -5
+          unzip -q cpython-main.zip
+          echo "SRC=cpython-main" >> "$GITHUB_ENV"
+          ls cpython-main | head -8
 
       - name: Build host python (needed as --with-build-python)
         run: |
           set -x
-          LOG=/tmp/host.log
-          exec > >(tee "$LOG") 2>&1
-          df -h / /root | tail -3
+          exec > >(tee /tmp/host.log) 2>&1
           cp -a "$SRC" "$RUNNER_TEMP/host_src"
           cd "$RUNNER_TEMP/host_src"
           chmod +x configure
@@ -52,17 +70,26 @@ jobs:
 
       - name: Configure (cross aarch64)
         run: |
+          set -x
           cd "$SRC"
-          # 7z 解压不会保留可执行位，先补上（否则 ./configure: Permission denied）
-          chmod +x configure 2>/dev/null || true
+          chmod +x configure
+          export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          export PKG_CONFIG_SYSROOT_DIR=/
           ./configure --host=aarch64-linux-gnu --build=x86_64-linux-gnu \
             --with-build-python="$RUNNER_TEMP/host_src/python" \
-            --prefix=/opt/python-aarch64 --disable-ipv6 \
-            --disable-test-modules --without-ensurepip \
+            --prefix=/opt/python-aarch64 \
+            --disable-test-modules \
+            --without-ensurepip \
             ac_cv_file__dev_ptmx=yes ac_cv_file__dev_ptc=no \
             ac_cv_buggy_getaddrinfo=no \
-            > /tmp/configure.log 2>&1 || { tail -50 /tmp/configure.log; echo '=== config.log tail ==='; tail -80 config.log 2>/dev/null; cp -f config.log /tmp/config.log 2>/dev/null; exit 1; }
-          tail -12 /tmp/configure.log
+            > /tmp/configure.log 2>&1 || {
+              tail -40 /tmp/configure.log
+              echo '=== config.log tail ==='
+              tail -80 config.log 2>/dev/null
+              cp -f config.log /tmp/config.log 2>/dev/null
+              exit 1
+            }
+          tail -25 /tmp/configure.log
 
       - name: Build
         run: |
@@ -83,6 +110,8 @@ jobs:
           make install DESTDIR="$RUNNER_TEMP/stage" > /tmp/install.log 2>&1 || { tail -40 /tmp/install.log; exit 1; }
           du -sh "$RUNNER_TEMP/stage/opt/python-aarch64"
           ls "$RUNNER_TEMP/stage/opt/python-aarch64/bin" | head -10
+          echo '--- built extension modules ---'
+          ls "$RUNNER_TEMP/stage/opt/python-aarch64/lib/python"*/lib-dynload/*.so 2>/dev/null | wc -l
 
       - name: Package
         run: |
@@ -95,8 +124,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: failure-logs
-          path: |
-            /tmp/*.log
+          path: /tmp/*.log
           if-no-files-found: ignore
 
       - name: Upload artifact

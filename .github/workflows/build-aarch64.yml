@@ -24,9 +24,15 @@ jobs:
 
           # ---- arm64 目标开发库：交叉编译 _ssl/_sqlite3/_bz2/_lzma/_ctypes/_zlib 必须要 ----
           sudo dpkg --add-architecture arm64
-          sudo sed -i -E 's/^deb (http[^ ]+) /deb [arch=amd64] \1 /' /etc/apt/sources.list || true
-          echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse' \
-            | sudo tee /etc/apt/sources.list.d/arm64-ports.list
+          # 所有 amd64 源显式限定架构，否则 apt 会去 security.ubuntu.com 要 arm64 索引（404）
+          for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
+            [ -f "$f" ] && sudo sed -i -E 's/^deb(-src)?[[:space:]]+([^[])/deb\1 [arch=amd64] \2/' "$f" || true
+          done
+          printf '%s\n' \
+            'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse' \
+            'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse' \
+            'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse' \
+            | sudo tee /etc/apt/sources.list.d/arm64-ports.list > /dev/null
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             libc6:arm64 libssl-dev:arm64 zlib1g-dev:arm64 libffi-dev:arm64 \

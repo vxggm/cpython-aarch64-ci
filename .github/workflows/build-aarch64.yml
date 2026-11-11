@@ -18,7 +18,7 @@ jobs:
           set -x
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential pkg-config unzip file qemu-user qemu-user-static \
+            build-essential pkg-config patchelf unzip file qemu-user qemu-user-static \
             gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             libc6-dev-arm64-cross
 
@@ -59,9 +59,9 @@ jobs:
 
       - name: Extract source
         run: |
-          unzip -q cpython-main.zip
-          echo "SRC=cpython-main" >> "$GITHUB_ENV"
-          ls cpython-main | head -8
+          unzip -q cpython-3.12.14.zip
+          echo "SRC=cpython-3.12.14" >> "$GITHUB_ENV"
+          ls cpython-3.12.14 | head -8
 
       - name: Build host python (needed as --with-build-python)
         run: |
@@ -112,7 +112,7 @@ jobs:
           echo "qemu=$QEMU"
           test -n "$QEMU"
           "$QEMU" -L /usr/aarch64-linux-gnu ./python -c \
-            'import sys, platform; print("version", sys.version.split()[0], "arch", platform.machine())'
+            'import sys, platform, ssl, sqlite3, readline, curses; print("version", sys.version.split()[0], "arch", platform.machine(), "modules OK")'
 
       - name: Install to staging
         run: |
@@ -131,7 +131,7 @@ jobs:
           du -sh . || true
 
           # 1) 去符号（体积大头）
-          aarch64-linux-gnu-strip --strip-unneeded bin/python3.16 || true
+          aarch64-linux-gnu-strip --strip-unneeded bin/python3.* || true
           find . -type f -name '*.so*' -exec aarch64-linux-gnu-strip --strip-unneeded {} + 2>/dev/null || true
 
           # 2) 只删「不该带」的：静态库、config-* 副本、测试、缓存
@@ -143,20 +143,47 @@ jobs:
           find . -type d \( -name test -o -name tests -o -name idle_test \) -prune -exec rm -rf {} + 2>/dev/null || true
 
           # 3) 预装 pip（与 astral 安装版同等待遇，开箱即用）
-          bin/python3.16 -m ensurepip --upgrade || true
+          bin/python3.* -m ensurepip --upgrade || true
           find . -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
 
           echo '--- final ---'
           du -sh .
           du -sh include lib share 2>/dev/null || true
           ls include/python*/Python.h 2>/dev/null || true
-          bin/python3.16 -m pip -V || true
+          bin/python3.* -m pip -V || true
+
+      - name: Bundle runtime libs + rpath
+        run: |
+          set -x
+          P="$RUNNER_TEMP/stage/opt/python-aarch64"
+          L="$P/lib"
+          A=/usr/lib/aarch64-linux-gnu
+          mkdir -p "$L"
+
+          # 扩展模块动态依赖的库：沙箱 rootfs 里没有，必须随包带
+          for pat in 'libreadline.so.8*' 'libncursesw.so.6*' 'libtinfo.so.6*' \
+                     'libssl.so.3*' 'libcrypto.so.3*' 'libsqlite3.so.0*' \
+                     'libffi.so.8*' 'libbz2.so.1*' 'liblzma.so.5*' \
+                     'libz.so.1*' 'libuuid.so.1*' 'libexpat.so.1*'; do
+            cp -a $A/$pat "$L/" 2>/dev/null || true
+          done
+          ls "$L" | grep -E '^lib' | head -15 || true
+
+          # RPATH：bin/python3.12 与 lib-dynload/*.so 都指向同包的 lib/
+          for f in "$P/bin/python3.12" "$L"/lib-dynload/*.so; do
+            [ -f "$f" ] || continue
+            patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/../../lib' "$f" 2>/dev/null || true
+          done
+          echo '--- rpath ---'
+          patchelf --print-rpath "$P/bin/python3.12" || true
+          echo '--- ldd python ---'
+          ldd "$P/bin/python3.12" 2>/dev/null | head -8 || true
 
       - name: Package
         run: |
           cd "$RUNNER_TEMP/stage/opt/python-aarch64"
-          tar czf "$GITHUB_WORKSPACE/python-aarch64-full.tar.gz" .
-          ls -l "$GITHUB_WORKSPACE/python-aarch64-full.tar.gz"
+          tar czf "$GITHUB_WORKSPACE/python-aarch64-3.12.tar.gz" .
+          ls -l "$GITHUB_WORKSPACE/python-aarch64-3.12.tar.gz"
 
       - name: Dump logs on failure
         if: failure()
@@ -170,5 +197,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: python-aarch64-build
-          path: python-aarch64-full.tar.gz
+          path: python-aarch64-3.12.tar.gz
           retention-days: 30

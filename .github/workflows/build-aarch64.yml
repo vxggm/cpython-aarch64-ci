@@ -34,6 +34,8 @@ jobs:
       - name: Configure (cross aarch64)
         run: |
           cd "$SRC"
+          # 7z 解压不会保留可执行位，先补上（否则 ./configure: Permission denied）
+          chmod +x configure 2>/dev/null || true
           ./configure --host=aarch64-linux-gnu --build=x86_64-linux-gnu \
             --prefix=/opt/python-aarch64 --disable-ipv6 \
             --disable-test-modules --without-ensurepip \

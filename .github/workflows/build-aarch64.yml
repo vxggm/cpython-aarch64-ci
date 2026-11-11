@@ -123,34 +123,40 @@ jobs:
           echo '--- built extension modules ---'
           ls "$RUNNER_TEMP/stage/opt/python-aarch64/lib/python"*/lib-dynload/*.so 2>/dev/null | wc -l
 
-      - name: Strip and slim
+      - name: Strip and slim (keep include/pkgconfig, prefetch pip)
         run: |
           set -x
           S="$RUNNER_TEMP/stage/opt/python-aarch64"
           cd "$S"
           du -sh . || true
 
-          # 1) 去掉符号与调试信息（体积大头）
+          # 1) 去符号（体积大头）
           aarch64-linux-gnu-strip --strip-unneeded bin/python3.16 || true
           find . -type f -name '*.so*' -exec aarch64-linux-gnu-strip --strip-unneeded {} + 2>/dev/null || true
 
-          # 2) 删掉运行时用不到的东西（对齐 astral 的 install_only_stripped）
+          # 2) 只删「不该带」的：静态库、config-* 副本、测试、缓存
+          #    保留 include/（Python.h）、lib/pkgconfig、share/man —— 编译 C 扩展要用
+          find . -type f -name '*.a' -delete 2>/dev/null || true
+          rm -rf lib/python*/config-* 2>/dev/null || true
           find . -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
           find . -type f -name '*.pyc' -delete 2>/dev/null || true
           find . -type d \( -name test -o -name tests -o -name idle_test \) -prune -exec rm -rf {} + 2>/dev/null || true
-          find . -type f -name '*.a' -delete 2>/dev/null || true
-          rm -rf include share/man share/doc lib/pkgconfig 2>/dev/null || true
 
-          echo '--- after slim ---'
+          # 3) 预装 pip（与 astral 安装版同等待遇，开箱即用）
+          bin/python3.16 -m ensurepip --upgrade || true
+          find . -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
+
+          echo '--- final ---'
           du -sh .
-          du -sh bin lib 2>/dev/null || true
-          file bin/python3.16
+          du -sh include lib share 2>/dev/null || true
+          ls include/python*/Python.h 2>/dev/null || true
+          bin/python3.16 -m pip -V || true
 
       - name: Package
         run: |
           cd "$RUNNER_TEMP/stage/opt/python-aarch64"
-          tar czf "$GITHUB_WORKSPACE/python-aarch64-slim.tar.gz" .
-          ls -l "$GITHUB_WORKSPACE/python-aarch64-slim.tar.gz"
+          tar czf "$GITHUB_WORKSPACE/python-aarch64-full.tar.gz" .
+          ls -l "$GITHUB_WORKSPACE/python-aarch64-full.tar.gz"
 
       - name: Dump logs on failure
         if: failure()
@@ -164,5 +170,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: python-aarch64-build
-          path: python-aarch64-slim.tar.gz
+          path: python-aarch64-full.tar.gz
           retention-days: 30

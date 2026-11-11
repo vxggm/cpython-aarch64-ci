@@ -8,7 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,12 +31,23 @@ jobs:
           echo "--- top of source ---"
           ls "$SRC" | head -5
 
+      - name: Build host python (needed as --with-build-python)
+        run: |
+          cp -a "$SRC" /root/host_src
+          cd /root/host_src
+          chmod +x configure
+          ./configure --without-ensurepip --disable-test-modules \
+            > /tmp/hostcfg.log 2>&1 || { tail -40 /tmp/hostcfg.log; exit 1; }
+          make -j"$(nproc)" > /tmp/hostmake.log 2>&1 || { tail -60 /tmp/hostmake.log; exit 1; }
+          /root/host_src/python -c 'import sys; print("host python", sys.version.split()[0])'
+
       - name: Configure (cross aarch64)
         run: |
           cd "$SRC"
           # 7z 解压不会保留可执行位，先补上（否则 ./configure: Permission denied）
           chmod +x configure 2>/dev/null || true
           ./configure --host=aarch64-linux-gnu --build=x86_64-linux-gnu \
+            --with-build-python=/root/host_src/python \
             --prefix=/opt/python-aarch64 --disable-ipv6 \
             --disable-test-modules --without-ensurepip \
             ac_cv_file__dev_ptmx=yes ac_cv_file__dev_ptc=no \
@@ -79,6 +90,8 @@ jobs:
             /tmp/configure.log
             /tmp/make.log
             /tmp/install.log
+            /tmp/hostcfg.log
+            /tmp/hostmake.log
           if-no-files-found: ignore
 
       - name: Upload artifact

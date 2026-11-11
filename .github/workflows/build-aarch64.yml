@@ -33,12 +33,15 @@ jobs:
 
       - name: Build host python (needed as --with-build-python)
         run: |
+          set -x
+          LOG=/tmp/host.log
+          exec > >(tee "$LOG") 2>&1
+          df -h / /root | tail -3
           cp -a "$SRC" /root/host_src
           cd /root/host_src
           chmod +x configure
-          ./configure --without-ensurepip --disable-test-modules \
-            > /tmp/hostcfg.log 2>&1 || { tail -40 /tmp/hostcfg.log; exit 1; }
-          make -j"$(nproc)" > /tmp/hostmake.log 2>&1 || { tail -60 /tmp/hostmake.log; exit 1; }
+          ./configure --without-ensurepip --disable-test-modules
+          make -j"$(nproc)"
           /root/host_src/python -c 'import sys; print("host python", sys.version.split()[0])'
 
       - name: Configure (cross aarch64)
@@ -87,11 +90,7 @@ jobs:
         with:
           name: failure-logs
           path: |
-            /tmp/configure.log
-            /tmp/make.log
-            /tmp/install.log
-            /tmp/hostcfg.log
-            /tmp/hostmake.log
+            /tmp/*.log
           if-no-files-found: ignore
 
       - name: Upload artifact
